@@ -4,47 +4,57 @@ import ipaddress
 
 conn = psycopg2.connect( host="localhost", database="ipam", user="postgres", password="xxx777&")
 
-def addresses_to_mask(first, last):
-   # FIXME, if first and last is not a network, raise exception and catch on the caller side so that we can save ranges as well
-   print("in the addresses to mask function", last, first)
+def first_last_to_net(first, last):
    f = ipaddress.ip_address(first)
    l = ipaddress.ip_address(last)
    if f.version == 4:
       # converts a number of hosts (including broadcast and network) into a subnet size
       diff = int(l) - int(f) + 1
       m = 35-len(str(bin(diff)))
-      return m
+      return str(f) + "/" + str(m)
    else:
       diff = int(l) - int(f) + 1 
       m =  131-len(str(bin(diff)))
-      return m
+      return str(f) + "/" +str(m) 
 
-def add_user(newuser, newpass, currentuser):
+def add_user(newuser, newpass):
    data_tuple = (newuser, newpass, newuser)
    sql_statement = "INSERT INTO users (username, password) SELECT %s, %s WHERE NOT EXISTS (SELECT username FROM users WHERE username = %s);"
-   return dbexecute(sql_statement, data_tuple)
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement, data_tuple)
+      conn.commit()
+      cur.close()
+   except Exception as e:
+      return(0, "database connection fail while trying to add user " + str(e))  
+   return (1,"") 
 
 def delete_user(currentuser):
    data_tuple = (currentuser,)
    sql_statement = "DELETE FROM users WHERE username = %s;"
-   return dbexecute(sql_statement, data_tuple)
-
-# returns all users in the system 
-def get_user():
-   sql_statement = "SELECT username FROM users;"
    try:
       cur = conn.cursor()
-      cur.execute( sql_statement)
+      cur.execute( sql_statement, data_tuple)
+      conn.commit()
+      cur.close()
+   except Exception as e:
+      return(0, "Unable to delete user " + str(e) ) 
+   return(1,"")
+
+# returns all users from a workspace 
+def get_user(workspace):
+   data_tuple = (workspace,)
+   sql_statement = "SELECT username FROM users WHERE workspace = %s;"
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement, data_tuple)
       conn.commit()
       userdata = cur.fetchall()
-      print("userdata", userdata)
       cur.close() 
    except:
       return (0, "unable to connect to database to get user details" )
-      #raise HTTPException(status_code=500, detail="unable to connect to database to get user details")
    if userdata is None:
-      return (0, "No users found")
-      #raise HTTPException(status_code=500, detail="No users found" )
+      return (1, [])
    cleandata = [] 
    for user in userdata:
          cleandata.append( user[0].strip())
@@ -60,7 +70,6 @@ def user_exists(username):
       cur.close()
    except:
       return (0, "unable to connect to database to get user details" )
-      #raise HTTPException(status_code=500, detail="unable to connect to database to get user details")
    if userdata == username:
       return (1, username) 
    else:
@@ -72,8 +81,14 @@ def user_exists(username):
 def add_workspace(name, currentuser):
    data_tuple = (name, currentuser, name, currentuser)
    sql_statement = "INSERT INTO workspaces (name, username) SELECT %s, %s WHERE NOT EXISTS (SELECT name, username FROM workspaces WHERE name = %s AND username = %s);"
-   a = dbexecute(sql_statement, data_tuple)
-   return a
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement, data_tuple)
+      conn.commit()
+      cur.close()
+   except Exception as e:
+      return(0,"unable to add workspace " + str(e)) 
+   return(1,"")
 
 def get_workspaces(username):
    data_tuple = (username,)
@@ -86,7 +101,6 @@ def get_workspaces(username):
       cur.close() 
    except Exception as e:
       return (0, "get workspaces error " + str(e))
-      #raise HTTPException(status_code=500, detail="get workspaces error " + str(e) )
    cleandata = []
    for data in wsdata:
       cleandata.append(data[0].strip())
@@ -94,71 +108,96 @@ def get_workspaces(username):
 
 def delete_user_from_workspace(username, workspacename):
    # does the user belong to this workspace? 
-   status, wslist = get_workspaces(username)
-   if status == 0:
-      return (0, wslist)
-   if workspacename not in wslist:
-      return (0, "User is not in this workspace" + str(wslist) + " " + workspacename)
-      #raise HTTPException(status_code=500, detail = "User not in this workspace")    
-
+   if not authorized( username, workspacename):
+      return (0, "user not authorized for this workspace")
    # is this the last user in the workspace?
    data_tuple = (workspacename,)
    sql_statement  = "SELECT * FROM workspaces WHERE name = %s"
-   if dbexecute(sql_statement , data_tuple ) < 2:
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement, data_tuple)
+      conn.commit()
+      cur.close()
+   except Exception as e:
+      return(0,"unable to determine if this is the last user " + str(e) ) 
+   if cur.rowcount < 2:
       return (0, "Can't delete the last user in a workspace")
-      #raise HTTPException(status_code=500, detail = "Can't delete the last user in a workspace.")
    data_tuple_b  = (workspacename, username)
-   print("USERNAME...", username)
    sql_statement_b = "DELETE FROM workspaces WHERE name = %s AND username = %s;"   
-   return (1, dbexecute(sql_statement_b, data_tuple_b))
-
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement_b, data_tuple_b)
+      conn.commit()
+      cur.close()
+   except Exception as e:
+      return(0,"unable to delete from workspace " + str(e))
+   return(1,"")
 
 def delete_workspace(username, workspacename):
    # does the user belong to this workspace? 
-   status, wslist = get_workspaces(username)
-   if status == 0:
-      return (0, wslist)
-   if workspacename not in wslist:
-      return (0, "User is not in this workspace")
-
+   if not authorized(username, workspacename):
+       return (0, "user not authorized for this workspace")
    # does this workspace own objects, if so they need to be deleted first
-   a = get_workspace_object_count( workspacename )
-   if a != 0 :
-       return(0, "Objects are still owned by this workspace, can't delete. Number of objects:" + str(a))  
-
+   data_tuple = ( workspace, )
+   sql_query = "SELECT COUNT(*) FROM IPAM WHERE workspace = %s"
+   try:
+      cur = conn.cursor()
+      cur.execute(sql_query, data_tuple)
+      count = cur.fetchone()[0]
+      cur.close()
+   except Exception as e:
+      return (0, "unable to determine if objects are present for this workspace, " + str(e))
+   if count != 0 :
+       return (0, "Objects are still owned by this workspace, cant delete. Number of objects: "+ count) 
    # is this the last user in the workspace, it must be for it to be deleted
-   data_tuple = (workspacename,)
-   sql_statement  = "SELECT * FROM workspaces WHERE name = %s"
-   if dbexecute(sql_statement , data_tuple ) != 1:
-      return (0, "Can't workspace unless only the final user remains, please remove any other users first")
-   data_tuple_b  = (workspacename, username)
-   sql_statement_b = "DELETE FROM workspaces WHERE name = %s AND username = %s"   
-   return (1, dbexecute(sql_statement_b, data_tuple_b))
+   data_tuple_b = (workspacename,)
+   sql_statement_b  = "SELECT * FROM workspaces WHERE name = %s"
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement_b, data_tuple_b)
+      conn.commit()
+      cur.close()
+   except Exception as e:
+      return(0,"unable to make sure this is the last user " + str(e))
+   if cur.rowcount != 1:
+      return (0, "Can't delete workspace unless only the final user remains, please remove any other users first")
+   data_tuple_c  = (workspacename, username)
+   sql_statement_c = "DELETE FROM workspaces WHERE name = %s AND username = %s"   
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement_c, data_tuple_c)
+      conn.commit()
+      cur.close()
+   except Exception as e:
+      return(0, "Unable to insert into database " + str(e) ) 
+   return (1, "")
 
 #############################################
 # network functions
 #############################################
 
-# add network, returns 1 if successful
+# add network
 def add_network(network, vrf, workspace, comment):
    first = str(network.network_address)
    last  = str(network.broadcast_address)    
    data_tuple = (first, last, vrf, workspace, comment)
    sql_statement = "INSERT INTO IPAM (FIRST, LAST, VRF, WORKSPACE, COMMENT) VALUES (%s,%s,%s,%s,%s);"
-   st, list_of_overlaps = get_overlaps( network, vrf, workspace)
-   if st == 0:
-      return (0, list_of_overlaps)
-   if( len(list_of_overlaps) > 0 ):
-      return (0, "overlaps with existing network")
-   return (1, dbexecute(sql_statement, data_tuple))
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement, data_tuple)
+      conn.commit()
+      cur.close()
+   except:
+      print("SQL error")
+      return {"status" : 0, "error" : "unable to connect to database to add network" }
+   return {"status" :1, "error" : ""} 
 
 
-def get(network, vrf):
+def get_network(network, vrf, workspace):
    first = str(network.network_address)
    last  = str(network.broadcast_address)
-   print("trying to get", first, last, vrf)
-   data_tuple = (first, last, vrf)
-   sql_statement = "SELECT * FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s;"
+   data_tuple = (first, last, vrf, workspace)
+   sql_statement = "SELECT * FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace = %s;"
    try:
       cur = conn.cursor()
       cur.execute( sql_statement, data_tuple)
@@ -168,31 +207,15 @@ def get(network, vrf):
    except:
       print("SQL error")
       return {"status" : 0, "error" : "unable to connect to database to get network details" } 
-      #raise HTTPException(status_code=500, detail="unable to connect to database to get network details")
    if ipdata is None:
       print("ip data is none -->", str(sql_statement), str(data_tuple))
-      return {"status" : 0, "error" : "no such network" } 
-      #raise HTTPException(status_code=500, detail="No such network" )
+      return {"status" : 0, "error" : "no such network " + network } 
    # FIXME, implement a filter function to remove certain data
-   print("About to return this:", ipdata)
-   mask = addresses_to_mask(ipdata[0], ipdata[1])
-   return { "status": 1 , "error" : "", "network" : ipdata[0] +"/"+ str(mask), "vrf" : ipdata[2], "workspace" : ipdata[3], "comment" : ipdata[4] }
-
-def get_workspace_object_count( workspace):
-    data_tuple = ( workspace, )
-    sql_query = "SELECT COUNT(*) FROM IPAM WHERE workspace = %s"
-    #try:
-    cur = conn.cursor()
-    cur.execute(sql_query, data_tuple)
-    count = cur.fetchone()[0]
-    print("count is ", count )
-    cur.close()
-    #except Exception as e:
-    #   print("Warning: ", str(e))
-    #   raise KeyError("overlap or database error")
-    return count 
-
-
+   try:
+      newnet = first_last_to_net(ipdata[0], ipdata[1])
+   except Exception as e: 
+      return { "status" : 0, "error" : str(e)}  
+   return { "status": 1 , "error" : "", "network" : newnet, "vrf" : ipdata[2], "workspace" : ipdata[3], "comment" : ipdata[4] }
 
 def get_overlaps(network , vrf, workspace):
     overlapping = [] 
@@ -207,80 +230,46 @@ def get_overlaps(network , vrf, workspace):
        overlapping = cur.fetchall()
        cur.close()
     except Exception as e:
-       return (0, "database error" )
-       #raise KeyError("No overlap or database error")
+       return (0, "Unable to get overlaps from database, " + str(e)  )
     for net in overlapping:
-      mask = addresses_to_mask(net[0], net[1]) 
-      cleaned_overlapping.append( str(net[0]) + "/" + str(mask) )
+      try:
+         newnet = first_last_to_net(net[0], net[1]) 
+      except:
+         return (0,"Unable to create network/mask from one of the found network, database unclean")   
+      cleaned_overlapping.append( newnet )
     return (1, cleaned_overlapping)   
 
-#FIXME, need to convert into using len( get_overlaps)
-#def count_overlaps(first, last , vrf):
-#    print("IN THE COUNT OVERLAPS FUNCTION")
-#    data_tuple = ( last, first, vrf) 
-#    sql_query = "SELECT COUNT(*) FROM IPAM WHERE first <= (inet %s) AND last >= (inet %s) AND vrf = %s"
-#    try: 
-#       cur = conn.cursor() 
-#       cur.execute(sql_query, data_tuple)
-#       numi = cur.fetchone()[0]
-#       cur.close()
-#    except Exception as e:
-#       print("E:", str(e)) 
-#       raise HTTPException(status_code=500, detail="Unable to verify overlaps, database issue") 
-#    return numi
-
-
-def delete(network, vrf):
+def delete(network, vrf, workspace):
    first = str(network.network_address)
    last  = str(network.broadcast_address)
-   data_tuple = (first, last, vrf)
-   sql_query_a = "SELECT COUNT(*) FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s;"
-   sql_query = "DELETE FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s;"
+   data_tuple = (first, last, vrf, workspace)
+   sql_query = "DELETE FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace=%s;"
    try:
       cur = conn.cursor()
-      cur.execute( sql_query_a, data_tuple)
-      numi = cur.fetchone()[0]
-   except Exception as e:
-      raise HTTPException(status_code=500,detail="Unable to verify that the network is in the database "+ str(e) )
-   if numi != 1:
-      raise HTTPException(status_code=500, detail="Network not found or not unique when trying to delete " + str(numi) )
-   try:
       cur.execute(sql_query, data_tuple)
       conn.commit()
       cur.close()
    except Exception as e:
-      raise HTTPException(status_code=500, detail="Unable to delete " + str(e) )
+      return (0, "Unable to delete from database, " + str(e))
+   return(1,"")
 
-def edit(network, oldvrf, newvrf, comment):
+
+def edit_network(network, oldvrf, newvrf, comment, workspace):
    first = str(network.network_address)
    last  = str(network.broadcast_address)
-   data_tuple = (newvrf, comment, first, last, oldvrf)
-   sql_query = "UPDATE IPAM SET vrf = %s, comment = %s WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s"
-   print("WILL try to run ", sql_query)
+   data_tuple = (newvrf, comment, first, last, oldvrf, workspace)
+   sql_query = "UPDATE IPAM SET vrf = %s, comment = %s WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace = %s;"
    try:
       cur = conn.cursor()
       cur.execute( sql_query, data_tuple)
+      conn.commit()
+      cur.close() 
    except Exception as e:
-      raise HTTPException(status_code=500, detail="Unable to update " + str(e) )
+      return (0, "Unable to edit network ," + str(e))
    if cur.rowcount == 0:
-         raise HTTPException(status_code=500, detail="Unable to update, network not found")
-   conn.commit()
-   cur.close()
-   return
+      return (0, "Unable to edit, network not found")
+   return (1,"")
    
-
-
-def dbexecute(sql_statement, data_tuple):
-   try:   
-      cur = conn.cursor()
-      cur.execute( sql_statement, data_tuple) 
-      conn.commit() 
-      cur.close()
-   except Exception as e:
-      print(str(sql_statement) + str(data_tuple))
-      raise HTTPException(status_code=500, detail="Unable to insert into database " + str(e) )
-   return cur.rowcount
-
 def authenticate( username, password):
    try:
       print( "username and password to validate", username, password )

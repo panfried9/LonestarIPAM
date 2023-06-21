@@ -13,7 +13,6 @@ security = HTTPBasic()
 # Helper functions                                                                 #
 ####################################################################################
 def authenticate(credentials: Annotated[HTTPBasicCredentials, Depends(security)]):
-      #print("Will check for ", credentials.username)
       if database.authenticate(credentials.username, credentials.password):
          return credentials.username
       else:
@@ -21,19 +20,12 @@ def authenticate(credentials: Annotated[HTTPBasicCredentials, Depends(security)]
          raise HTTPException(status_code=401, detail="Invalid username or password")
 
 def authorized(username, workspace):
-    if database.authorized(username, workspace):
-      return 1
-    return 0 
+    return database.authorized(username, workspace)
  
-def authorized_for_net(username, network, vrf):
-    # then find out what workspace this network belongs to
-    #try:
-    print( "Check that ", username, " is authorized for ", str(network) )
-    a = database.get(network, vrf)
-    #except:
-    #  print("Couldn't even get that net ", str(network))
-    #  return 0
-    # tcheck to see if user is authorized for this workspace
+def authorized_for_net(username, network, vrf, workspace):
+    a = database.get_network(network, vrf, workspace)
+    if a["status"] == 0:
+      return 0
     if authorized(username, a["workspace"] ):
       return 1
     else:
@@ -51,21 +43,18 @@ async def add_workspace(request: Request, options: ws, username: Annotated[str, 
    requested = await request.json()
    if not authorized( username, "admin"):
       raise HTTPException(status_code=401, detail="Only users in the admin group can add workspaces")
-   if len(requested["wsname"]) > 50:
-      raise HTTPException(status_code=500, detail="Workspace name too long, max 50")
    a = database.add_workspace(requested["wsname"], username)
-   if a == 1:
-      return status.HTTP_201_CREATED
-   else:
-      raise HTTPException(status_code=500, detail="Unable to insert, workspace already exists")
+   if a[0] == 0:
+      raise HTTPException(status_code=500, detail="Unable add workspace, " + a[1] )
+   return status.HTTP_201_CREATED
 
 @app.get("/workspaces")
 async def get_workspaces( username: Annotated[str, Depends(authenticate)] ):
-   # no explicity authorization required 
    a = database.get_workspaces( username)
-   print("A type:", type(a)) 
-   return a
-
+   if a[0] == 1:
+     return (1, a[1])
+   else:
+     return (0, a[0]) 
 
 ####################################################################################
 # Mappings between users and workspaces                                            #
@@ -80,14 +69,13 @@ async def add_user_to_workspace( request: Request, options: uw, username: Annota
   if not authorized( username, requested["workspace"]):
      raise HTTPException(status_code=401, detail="Requestor not authorized for the workspace")
   #check if user exists
-  statusin, userstatus = database.user_exists(requested["usertoadd"])
-  if statusin == 0: 
-     raise HTTPException(status_code=500, detail=userstatus)
-  a = database.add_workspace(requested["workspace"], requested["usertoadd"])
-  if a == 1:
-     return status.HTTP_201_CREATED
-  else:
-     raise HTTPException(status_code=500, detail="Unable to insert, add_workspace error")
+  a = database.user_exists(requested["usertoadd"])
+  if a[0] == 0: 
+     raise HTTPException(status_code=500, detail= a[1])
+  b = database.add_workspace(requested["workspace"], requested["usertoadd"])
+  if b[0] == 0:
+     raise HTTPException(status_code=500, detail="Unable to add user to workspace, " + b[1])
+  return status.HTTP_201_CREATED
 
 class workspace(BaseModel):
    workspace: str
@@ -110,36 +98,34 @@ class nu (BaseModel):
 @app.post("/users")
 async def newuser(request: Request, options: nu, username: Annotated[str, Depends(authenticate)]):
    requested = await request.json()
-   if len(requested["newuser"]) > 50 or len(requested["newpass"]) > 50:
-      raise HTTPException(status_code=500, detail="Username and/or password too long, max 50")
-   a = database.add_user(requested["newuser"], requested["newpass"], username)
-   if a == 1:
+   a = database.add_user(requested["newuser"], requested["newpass"] )
+   if a[0] == 1:
       return status.HTTP_201_CREATED
    else:
-      raise HTTPException(status_code=500, detail="Unable to insert, user already exists")
+      raise HTTPException(status_code=500, detail="Unable to insert, " + a[1] )
 
 # Delete requestor from database.
 @app.delete("/users")
 async def delete_user(username: Annotated[str, Depends(authenticate)]):
-   status, ws = database.get_workspaces( username )
-   if status == 0:
-      raise HTTPException(status_code  = 500, detail= ws )
-   if len( ws ) != 0:
+   a = database.get_workspaces( username )
+   if a[0] == 0:
+      raise HTTPException(status_code  = 500, detail= a[1] )
+   if len( a[1] ) != 0:
       raise HTTPException(status_code = 500, detail="Can't delete, user still member of at least one workspace.")
-   a = database.delete_user( username)
-   if a == 1:
+   b = database.delete_user( username)
+   if b == 1:
       return status.HTTP_200_OK 
    else:
       raise HTTPException(status_code=500, detail="Unable to delete, user doesn't exists")
 
-# FIXME, should this function be limited to the workspace you are in? Seems dangerous to get all users
-@app.get("/users")
-async def get_user( username: Annotated[str, Depends(authenticate)]):
-   status, userdata = database.get_user()
-   if status == 1:
-     return userdata 
-   else:
-     raise HTTPException(status_code=500, detail=userdata)
+@app.get("/users/{workspace}")
+async def get_user( workspace: str, username: Annotated[str, Depends(authenticate)]):
+   if not authorized( username, workspace):
+     raise HTTPException(status_code=500, detail="User not authorized for this workspace")
+   a = database.get_user(workspace)
+   if a[0] == 1:
+     return a[1] 
+   raise HTTPException(status_code=500, detail=a[1])
 
 ####################################################################################
 # Network manipulation functions                                                   #
@@ -153,28 +139,26 @@ class net (BaseModel):
 @app.post("/networks") 
 async def add_net(request: Request, options: net, username: Annotated[str, Depends(authenticate)]):
    requested = await request.json()
-   if not authorized(username, requested["workspace"]):
-      raise HTTPException(status_code=500,detail="user not authorized for this workspace or workspace doesn't exists " )      
    try:
       network = ipaddress.ip_network( requested["ipnet"] + "/" + requested["mask"] , strict=True )
    except Exception as e:
       raise HTTPException(status_code=500,detail="not valid IPv4 or IPv6 network " + str(e)  )
-   st, details = database.add_network( network, requested["vrf"], requested["workspace"], requested["comment"]) 
-   if st == 1:
+   a = database.add_network( network, requested["vrf"], requested["workspace"], requested["comment"]) 
+   if a["status"] == 1:
        return status.HTTP_201_CREATED
-   else:
-       raise HTTPException(status_code=500,detail= details)     
+   raise HTTPException(status_code=500,detail= a["error"])     
 
-@app.get("/networks/{vrf}/{ipnet}/{mask}")
-async def get_net(vrf: str, ipnet: str, mask: str, username: Annotated[str, Depends(authenticate)]):
+@app.get("/networks/{workspace}/{vrf}/{ipnet}/{mask}")
+async def get_net(workspace: str, vrf: str, ipnet: str, mask: str, username: Annotated[str, Depends(authenticate)]):
    try:
       network = ipaddress.ip_network( ipnet + "/" + mask, strict=True) 
    except Exception as e:
       raise HTTPException(status_code=500, detail="not valid IPv4 or IPv6 network " + str(e) ) 
-   #print( "Lets query for", str(network), str(vrf) ) 
-   if not authorized_for_net(username, network, str(vrf)):
+   if not authorized_for_net(username, network, vrf, workspace):
       raise HTTPException(status_code=500,detail="user not authorized for this network or network doesn't exists " + str(network)  )  
-   ipdata = database.get( network, vrf)
+   ipdata = database.get_network( network, vrf, workspace)
+   if ipdata["status"] == 0:
+      raise HTTPException(status_code=500, detail = ipdata["error"])
    return ipdata 
 
 class netnc (BaseModel):
@@ -185,18 +169,14 @@ class netnc (BaseModel):
 @app.delete("/networks")
 async def delete_net(request: Request, options: netnc, username: Annotated[str, Depends(authenticate)]):
    requested = await request.json()   
-   # FIXME, this function should not have to take a workspace, instead the workspace should be found and authorized before deleting 
-   #if not authorized(username, requested["workspace"]):
-   #   raise HTTPException(status_code=500,detail="user not authorized for this workspace or workspace doesn't exists" )      
    try:
       network = ipaddress.ip_network( requested["ipnet"] + "/" + requested["mask"] , strict=False)
    except Exception as e:
       raise HTTPException(status_code=500, detail="not valid IPv4 or IPv6 network " + str(e)  ) 
-   a = database.get(network, requested["vrf"])
-   print("FOUND THIS NETWORK AS" , a)
-
-
-   database.delete( network, requested["vrf"])
+   a = database.get_network(network, requested["vrf"], requested["workspace"])
+   if a["status"] == 0: 
+      raise HTTPException(status_code=500, detail = a["error"])
+   database.delete( network, requested["vrf"], requested["workspace"])
    return status.HTTP_200_OK 
 
 # Get the parent (overlapping) network
@@ -206,24 +186,16 @@ async def get_overlaps(workspace: str, vrf: str, ipnet: str, mask: str, username
       network = ipaddress.ip_network( ipnet + "/" + mask, strict=True) 
    except Exception as e:
       raise HTTPException(status_code=500, detail="not valid IPv4 or IPv6 network " + str(e) )     
-   print( "Lets query for", str(network), str(vrf) ) 
-   try:
-      st, ipdata = database.get_overlaps( network, vrf, workspace)
-   except:
-      # maybe this network doesn't exist, in that case we can't check if the user is authorized or not
-      return { "overlaps": [] }
-   if st == 0:
-      raise HTTPException(status_code=500, detail=ipdata )
-   # just check the first network, we know the user is authorized for all of them if authorized for one, since the SELECT in get_overlaps is filtering out just this workspace
-   check_net = ipaddress.ip_network( ipdata[0] )
-   if not authorized_for_net(username, check_net, str(vrf) ): 
-      raise HTTPException(status_code=401,detail="user not authorized for this workspace or workspace doesn't exists" + str( ipdata[3]) )  
-   return { "overlaps" : ipdata }  
+   a = database.get_overlaps( network, vrf, workspace)
+   if a[0] == 0:
+      raise HTTPException(status_code=500, detail= a[1] )
+   return { "overlaps" : a[1] }  
 
 # Edit VRF or Comment on a network
 class nettra (BaseModel):
    ipnet: str
    mask: str # can be 24 or 255.255.255.0  
+   workspace: str
    oldvrf: str
    newvrf: str
    comment: str
@@ -234,17 +206,18 @@ async def transfer_net(request: Request, options: nettra, username: Annotated[st
       network = ipaddress.ip_network( requested["ipnet"] + "/" + requested["mask"] , strict=True)
    except:
       raise HTTPException(status_code=500, detail="not valid IPv4 or IPv6 network " + str(e)  )
-   if not authorized_for_net(username, network, requested["oldvrf"]):
+   if not authorized_for_net(username, network, requested["oldvrf"], requested["workspace"]):
       raise HTTPException(status_code=500,detail="user not authorized for this network or network doesn't exists " + str(e)  )  
-   # ipdata = database.get( network, vrf) ### commented this out not sure why we would need to get the address prior to editing. 
-   print("WILL try to edit", str(network) )
-   database.edit(network, requested["oldvrf"], requested["newvrf"], requested["comment"] )
+   a = database.edit_network(network, requested["oldvrf"], requested["newvrf"], requested["comment"], requested["workspace"] )
+   if a[0] == 0:
+      raise HTTPException(status_code=500,detail= a[1] ) 
    return status.HTTP_201_CREATED
 
 class netspl (BaseModel):
    ipnet: str
    mask: str # can be 24 or 255.255.255.0  
    vrf: str
+   workspace: str
    excludeip: str 
    excludemask: str 
 #split network
@@ -253,29 +226,89 @@ async def exclude_net(request: Request, options: netspl, username: Annotated[str
    requested = await request.json()  
    try:
       network = ipaddress.ip_network( requested["ipnet"] + "/" + requested["mask"], strict=True) 
-   except:
+   except Exception as e:
       raise HTTPException(status_code=500, detail="Network to split from is not valid IPv4 or IPv6 network " + str(e) ) 
-   if not authorized_for_net(username, network, requested["vrf"]):
+   if not authorized_for_net(username, network, requested["vrf"], requested["workspace"]):
       raise HTTPException(status_code=500,detail="user not authorized for this network or network doesn't exists " + str(network)  )  
-   #ipdata = database.get( network, requested["vrf"]) ### commenting this out not sure why we would need it not used below
-
    try:
-      print("exclude IP ", requested["excludeip"], "Exclude mask", requested["excludemask"])
       exclude_network = ipaddress.ip_network( requested["excludeip"] + "/" + requested["excludemask"], strict=True) 
    except Exception as e:
       raise HTTPException(status_code=500, detail="Network to split out is not valid IPv4 or IPv6 network " + str(e) ) 
-   a = database.get(network, requested["vrf"])
-   if not a:
-      raise HTTPException(status_code=500, detail="Network to split from is not found")
+   a = database.get_network(network, requested["vrf"], requested["workspace"])
+   if a["status"] == 0:
+      raise HTTPException(status_code=500, detail=a["error"])
    try:
       newnets = list(network.address_exclude(exclude_network))
    except Exception as e:
        raise HTTPException(status_code=500, detail="Unable to split out networks " +str(e))     
    newnets.append( exclude_network) # append the network that was requested to be split out so that this also is added back
-   #FIXME entire below need to be in one transaction 
-   database.delete(network, requested["vrf"])    # delete the old network
+   #FIXME entire below need to be in one transaction
+   b = database.delete(network, requested["vrf"], requested["workspace"])    # delete the old network
+   if b[0] == 0:
+      raise HTTPException(status_code=500, detail="Unable to delete old network during split " + b[1])  
    for newnet in newnets:           # add all the new networks
-      database.add_network(newnet, requested["vrf"],a["workspace"], a["comment"]) # retain the workspace and comment for the new networks
-      #FIXME check return codes
-   return newnets
+      print("Add loop")
+      database.add_network(newnet, requested["vrf"],requested["workspace"], a["comment"]) # retain the workspace and comment for the new networks
+      #FIXME check return codes, transaction 
+   return { "networks" : newnets }
 
+# summarize networks
+class netsum (BaseModel):
+   ipnets: list
+   vrf: str
+   workspace: str
+#split network
+@app.post("/networks/summarize")
+async def exclude_net(request: Request, options: netsum, username: Annotated[str, Depends(authenticate)]):
+   requested = await request.json()
+   confirmed_nets = [] 
+   fourfound = sixfound = 0 
+   # check that the network is valid and correct and exists
+   for net in requested["ipnets"]:
+      try:
+         newnet = ipaddress.ip_network(net, strict=True)
+      except:
+         raise HTTPException(status_code=500, detail="Submitted string is not a network " + net)
+      if newnet.version == 4:
+         fourfound = 1
+         if sixfound:
+            raise HTTPException( status_code=500, detail="mixed v4 and v6 nets can't be summarized")   
+      else:
+         sixfound = 1
+         if fourfound:
+            raise HTTPException( status_code=500, detail="mixed v4 and v6 nets can't be summarized") 
+      try:
+         a = database.get_network( newnet, requested["vrf"], requested["workspace"] )
+      except:
+         raise HTTPException( status_code=500, detail="Unable to find network " + str(newnet) + " in vrf " + requested["vrf"]) 
+      if a["status"] == 0: 
+         raise HTTPException( status_code=500, detail= a["error"] ) 
+      # also the requested network should be added back to the database, append it
+      confirmed_nets.append(newnet ) 
+   # if 0 or 1 network just return that, no database change needed
+   if len(confirmed_nets) <2 :
+      return { "networks" : confirmed_nets }
+
+   # make sure nets are contigious 
+   sort_nets = sorted( confirmed_nets,  key=lambda i: i.network_address )
+   last_last = sort_nets[0].broadcast_address 
+   for i in range(1, len(sort_nets)):
+      if last_last + 1 != sort_nets[i].network_address:
+         raise HTTPException( status_code=500, detail="network not contigiuos gap/overlap between " + str(sort_nets[i-1]) +" and " + str(sort_nets[i])) 
+      last_last = sort_nets[i].broadcast_address
+
+   # if we are here, networks are not overlapping or gapping
+   # try to fuse them together
+   try:
+      summarized = ipaddress.summarize_address_range(sort_nets[0].network_address, sort_nets[-1].broadcast_address)
+   except Exception as e:
+      raise HTTPException( status_code=500, detail="unable to summarize " + str(e)) 
+
+   #FIXME make this into a transaction
+   for d in confirmed_nets :
+      database.delete( d, requested["vrf"], requested["workspace"] ) 
+   returnnet = [] 
+   for a in summarized:
+      database.add_network( a, requested["vrf"], requested["workspace"], "created via split"  )
+      returnnet.append(str(a))  
+   return { "networks" : returnnet }
