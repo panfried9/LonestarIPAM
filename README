@@ -1,0 +1,22 @@
+
+
+
+
+STATUS
+======
+The various types of statuses a network can have is described below. 
+
+UNASSIGNED - This network is not assigned to the workspace. For example public networks owned by other ccorporations belongs in this category. A user in the workspace can make the network AVAILABLE. 
+ 
+AVAILABLE - This network is available to use. Any user in the workspace can carve out network from this block and change the status of them.
+ 
+RESERVED - This network is not in use but reserved for some future use. Any user in the workspace can change the status of this network. 
+
+IN-USE-FOUND - This network was UNASSIGNED, AVAILABLE or RESERVED but the system have evidence that it is being used. Any user can change the status of this network. Setting the network to IN-USE-FOUND is only available via API and should not be available via GUI. It should only be done by automatic processes such as scanners.  
+ 
+IN-USE-SET - This network was manually set to in-use by a user of the workspace.  
+ 
+CAPPED - This network is about to be decommissioned and can't be split or have IP addressess added to it.  
+
+The STATUS of a network is maintained by the resulting networks of a split. If two or more networks are joined together, the status is saved as AVAILABLE regardless of that statuses the joined networks had. 
+
