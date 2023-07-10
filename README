@@ -1,4 +1,14 @@
 
+IPAM system using FastAPI
+Goal is to have a modern and modular IPAM system
+Modules can be network scanners, import functions, GUI, etc 
+Currently only support IP Networks, not IP addresses (although you can save addresses as /32)
+
+
+Copyright 2023 Stephan Lagerholm 
+Licensed under GPL, please see LICENSE file for details
+
+
 
 
 
