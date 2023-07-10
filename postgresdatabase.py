@@ -18,8 +18,8 @@ def first_last_to_net(first, last):
       return str(f) + "/" +str(m) 
 
 # TRANSACTION SAFE
-def add_user(newuser, newpass):
-   data_tuple = (newuser, newpass, newuser)
+def add_user(user):
+   data_tuple = (user.username, user.password, user.username)
    sql_statement = "INSERT INTO users (username, password) SELECT %s, %s WHERE NOT EXISTS (SELECT username FROM users WHERE username = %s);"
    try:
       cur = conn.cursor()
@@ -50,14 +50,14 @@ def delete_user(currentuser):
 # returns all users from a workspace 
 def get_user(workspace):
    data_tuple = (workspace,)
-   sql_statement = "SELECT username FROM users WHERE workspace = %s;"
+   sql_statement = "SELECT * FROM users WHERE workspace = %s;"
    try:
       cur = conn.cursor()
       cur.execute( sql_statement, data_tuple)
       userdata = cur.fetchall()
-   except:
+   except Exception as e:
       cur.close()
-      return (0, "unable to connect to database to get user details" )
+      return (0, "unable to connect to database to get user details" + str(e) )
    cur.close()
    if userdata is None:
       return (1, [])
@@ -70,7 +70,7 @@ def get_user(workspace):
 # workspace functions
 ########################################
 # TRANSACTION SAFE
-def add_workspace(name, user):
+def add_workspace(workspace, user):
    # make sure the new user exists
    # this function is used both for adding a brand new workspace 
    # as well as adding a user to the workspace
@@ -90,7 +90,7 @@ def add_workspace(name, user):
       return (0, "unable to verify new users exists" )
 
    # make sure there is no such mapping already
-   data_tuple_a = (name, user)  
+   data_tuple_a = (workspace.workspacename, user)  
    sql_statement_a = "SELECT COUNT(*) FROM workspaces WHERE name = %s AND username = %s;" 
    try:
      cur.execute( sql_statement_a, data_tuple_a) 
@@ -102,7 +102,7 @@ def add_workspace(name, user):
       return (0, "This user/workspace mapping already exists in database " )
 
    # insert
-   data_tuple_b = (name, user)
+   data_tuple_b = (workspace.workspacename, user)
    sql_statement_b = "INSERT INTO workspaces (name, username) VALUES (%s, %s) ;"
    try:
       cur.execute( sql_statement_b, data_tuple_b)
@@ -205,11 +205,15 @@ def delete_workspace(username, workspacename):
 #############################################
 
 # TRANSACTION SAFE
-def add_network(network, vrf, workspace, comment):
+def add_network(net):
+   try:
+      network = ipaddress.ip_network( net.ipnet , strict=True )
+   except Exception as e:
+      return  {"error" : "unable to process network, address is incorrect , " + str(e) }   
    first = str(network.network_address)
    last  = str(network.broadcast_address)    
-   data_tuple = (first, last, vrf, workspace, comment )
-   sql_statement = "INSERT INTO ipam (first, last, vrf, workspace, comment) VALUES (%s,%s,%s,%s,%s );"
+   data_tuple = (first, last, net.vrf, net.workspace, net.comment, net.current_status )
+   sql_statement = "INSERT INTO ipam (first, last, vrf, workspace, comment, current_status) VALUES (%s,%s,%s,%s,%s,%s );"
    try:
       cur = conn.cursor()
       cur.execute( sql_statement, data_tuple)
@@ -217,50 +221,55 @@ def add_network(network, vrf, workspace, comment):
    except Exception as e:
       conn.rollback()
       cur.close() 
-      return {"status" : 0, "error" : "unable to connect to database to add network , " +str(e) }
+      return {"error" : "unable to connect to database to add network , " +str(e) }
    cur.close() 
-   return {"status" :1, "error" : ""} 
+   return {"ipnet" : str(network), "vrf": net.vrf, "workspace": net.workspace, "comment": net.comment, "current_status" : net.current_status} 
 
-# TRANSACTION SAFE
-def del_then_add_network(oldnets, vrf, workspace, newnets, comment, in_status):
-   print("IN STATUS, ", in_status) 
+########################################################################
+# TRANSACTION SAFE                                                     #
+# takes a list of type netSplit of old network                         # 
+# and a list of new networks of type fullNet                           #
+# delete the old network                                               #
+# add the new network                                                  #
+########################################################################
+def del_then_add_network(oldnets, newnets):
    cur = conn.cursor()
    for oldnet in oldnets:
-      print("OLDNET: ", str(oldnet) )  
-      first_o = str(oldnet.network_address)
-      last_o  = str(oldnet.broadcast_address)
-      data_tuple = (first_o, last_o, vrf, workspace)
-      sql_query = "DELETE FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace=%s;"
+      first_o = str( ipaddress.ip_network(oldnet.ipnet).network_address)
+      last_o  = str( ipaddress.ip_network(oldnet.ipnet).broadcast_address)
+      data_tuple = (first_o, last_o, oldnet.vrf, oldnet.workspace)
+      sql_statement_a = "DELETE FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace=%s;"
       try:
-         cur.execute(sql_query, data_tuple)
+         cur.execute(sql_statement_a, data_tuple)
       except Exception as e:
          cur.rollback() 
          cur.close()
          return (0,"unable to delete network ," + str(e))  
-
    for newnet in newnets: 
-      first_n = str(newnet.network_address)
-      last_n  = str(newnet.broadcast_address)
-      data_tuple = (first_n, last_n, vrf, workspace, comment, in_status )
-      
-      sql_statement = "INSERT INTO ipam (first, last, vrf, workspace, comment, current_status ) VALUES (%s,%s,%s,%s,%s,%s);"
+      first_n = str( ipaddress.ip_network(newnet.ipnet).network_address)
+      last_n  = str( ipaddress.ip_network(newnet.ipnet).broadcast_address)
+      # grab comment and status from the first element of old network
+      data_tuple = (first_n, last_n, newnet.vrf, newnet.workspace, newnet.comment, newnet.current_status )
+      sql_statement_b = "INSERT INTO ipam (first, last, vrf, workspace, comment, current_status ) VALUES (%s,%s,%s,%s,%s,%s);"
       try:
-         cur.execute( sql_statement, data_tuple)
+         cur.execute( sql_statement_b, data_tuple)
       except Exception as e:
          conn.rollback()
          cur.close()
-         return (0, "unable to connect to database to add network , " +str(e)) 
+         return (0, "unable to connect to database to add network , " + str(e)) 
    conn.commit() 
    cur.close()
    return (1,"")  
    
-
-
 # TRANSACTION SAFE
-def get_network(network, vrf, workspace):
+def get_network(net):
+   try:
+      network = ipaddress.ip_network( net.ipnet , strict=True )
+   except Exception as e:
+      return  {"error" : "unable to process network, address is incorrect , " + str(e) }   
    first = str(network.network_address)
    last  = str(network.broadcast_address)
-   data_tuple = (first, last, vrf, workspace)
+   data_tuple = (first, last, net.vrf, net.workspace)
    sql_statement = "SELECT * FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace = %s;"
    try:
       cur = conn.cursor()
@@ -268,17 +277,17 @@ def get_network(network, vrf, workspace):
       ipdata = cur.fetchone()
    except Exception as e:
       cur.close() 
-      return {"status" : 0, "error" : "unable to connect to database to get network details, "+str(e) } 
+      return {"error" : "unable to connect to database to get network details, " + str(e) } 
    if ipdata is None:
       cur.close() 
-      return {"status" : 0, "error" : "no such network, " + str(network) } 
+      return {"error" : "no such network, " + str(network) } 
    cur.close() 
    # FIXME, implement a filter function to remove certain data
    try:
       newnet = first_last_to_net(ipdata[0], ipdata[1])
    except Exception as e: 
-      return { "status" : 0, "error" : "Unable to convert database info to network, " + str(e)}  
-   return { "status": 1 , "error" : "", "network" : newnet, "vrf" : ipdata[2], "workspace" : ipdata[3], "comment" : ipdata[4], "current_status" : ipdata[5] }
+      return { "error" : "Unable to convert database info to network, " + str(e)}  
+   return { "ipnet" : newnet, "vrf" : ipdata[2], "workspace" : ipdata[3], "comment" : ipdata[4], "current_status" : ipdata[5] }
 
 # TRANSACTION SAFE
 def get_overlaps(network , vrf, workspace):
@@ -301,7 +310,7 @@ def get_overlaps(network , vrf, workspace):
          newnet = first_last_to_net(net[0], net[1]) 
       except:
          return (0,"Unable to create network/mask from one of the found network, database unclean")   
-      cleaned_overlapping.append( newnet )
+      cleaned_overlapping.append( {"ipnet" : newnet, "vrf" : net[2].strip(), "workspace" : net[3].strip(), "comment" : net[4].strip(), "current_status" : net[5] } )
     return (1, cleaned_overlapping)   
 
 # TRANSACTION SAFE

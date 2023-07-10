@@ -17,12 +17,13 @@ sql_statement.append("CREATE TABLE workspaces (NAME CHAR(50), USERNAME CHAR(50))
 sql_statement.append("INSERT INTO users (USERNAME, PASSWORD) VALUES ('stephan', 'mufflers');")
 sql_statement.append("INSERT INTO workspaces (NAME, USERNAME) VALUES ('admin', 'stephan');")
 
-
-
 cur = conn.cursor()
 for statement in sql_statement:
+   print("STATEMENT ", statement) 
    cur.execute( statement)
 
 conn.commit()
 cur.close()
+
+print("INIT Complete") 
 
