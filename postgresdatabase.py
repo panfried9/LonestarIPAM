@@ -1,8 +1,12 @@
 import psycopg2
 from fastapi import HTTPException
 import ipaddress
+import json
 
-conn = psycopg2.connect( host="localhost", database="ipam", user="postgres", password="xxx777&")
+f = open('config.json') 
+config = json.load(f) 
+
+conn = psycopg2.connect( host=config["host"], database=config["database"], user=config["user"], password=config["password"] )
 
 def first_last_to_net(first, last):
    f = ipaddress.ip_address(first)
@@ -132,12 +136,12 @@ def get_workspaces(username):
       cleandata.append(data[0].strip())
    return (1, cleandata)
 
-def delete_user_from_workspace(username, workspacename):
+def delete_user_from_workspace(username, workspace):
    # does the user belong to this workspace? 
-   if not authorized( username, workspacename):
+   if not authorized( username, workspace.workspacename):
       return (0, "user not authorized for this workspace")
    # is this the last user in the workspace?
-   data_tuple = (workspacename,)
+   data_tuple = (workspace.workspacename,)
    sql_statement  = "SELECT * FROM workspaces WHERE name = %s"
    try:
       cur = conn.cursor()
@@ -148,7 +152,7 @@ def delete_user_from_workspace(username, workspacename):
    if cur.rowcount < 2:
       cur.close()
       return (0, "Can't delete the last user in a workspace")
-   data_tuple_b  = (workspacename, username)
+   data_tuple_b  = (workspace.workspacename, username)
    sql_statement_b = "DELETE FROM workspaces WHERE name = %s AND username = %s;"   
    try:
       cur.execute( sql_statement_b, data_tuple_b)
@@ -166,7 +170,7 @@ def delete_workspace(username, workspacename):
        return (0, "user not authorized for this workspace")
    # does this workspace own objects, if so they need to be deleted first
    data_tuple = ( workspace, )
-   sql_query = "SELECT COUNT(*) FROM IPAM WHERE workspace = %s"
+   sql_query = "SELECT COUNT(*) FROM networks WHERE workspace = %s"
    try:
       cur = conn.cursor()
       cur.execute(sql_query, data_tuple)
@@ -213,7 +217,7 @@ def add_network(net):
    first = str(network.network_address)
    last  = str(network.broadcast_address)    
    data_tuple = (first, last, net.vrf, net.workspace, net.comment, net.current_status )
-   sql_statement = "INSERT INTO ipam (first, last, vrf, workspace, comment, current_status) VALUES (%s,%s,%s,%s,%s,%s );"
+   sql_statement = "INSERT INTO networks (first, last, vrf, workspace, comment, current_status) VALUES (%s,%s,%s,%s,%s,%s );"
    try:
       cur = conn.cursor()
       cur.execute( sql_statement, data_tuple)
@@ -238,7 +242,7 @@ def del_then_add_network(oldnets, newnets):
       first_o = str( ipaddress.ip_network(oldnet.ipnet).network_address)
       last_o  = str( ipaddress.ip_network(oldnet.ipnet).broadcast_address)
       data_tuple = (first_o, last_o, oldnet.vrf, oldnet.workspace)
-      sql_statement_a = "DELETE FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace=%s;"
+      sql_statement_a = "DELETE FROM networks WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace=%s;"
       try:
          cur.execute(sql_statement_a, data_tuple)
       except Exception as e:
@@ -250,7 +254,7 @@ def del_then_add_network(oldnets, newnets):
       last_n  = str( ipaddress.ip_network(newnet.ipnet).broadcast_address)
       # grab comment and status from the first element of old network
       data_tuple = (first_n, last_n, newnet.vrf, newnet.workspace, newnet.comment, newnet.current_status )
-      sql_statement_b = "INSERT INTO ipam (first, last, vrf, workspace, comment, current_status ) VALUES (%s,%s,%s,%s,%s,%s);"
+      sql_statement_b = "INSERT INTO networks (first, last, vrf, workspace, comment, current_status ) VALUES (%s,%s,%s,%s,%s,%s);"
       try:
          cur.execute( sql_statement_b, data_tuple)
       except Exception as e:
@@ -270,7 +274,7 @@ def get_network(net):
    first = str(network.network_address)
    last  = str(network.broadcast_address)
    data_tuple = (first, last, net.vrf, net.workspace)
-   sql_statement = "SELECT * FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace = %s;"
+   sql_statement = "SELECT * FROM networks WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace = %s;"
    try:
       cur = conn.cursor()
       cur.execute( sql_statement, data_tuple)
@@ -296,7 +300,7 @@ def get_overlaps(network , vrf, workspace):
     first = str(network.network_address)
     last  = str(network.broadcast_address)
     data_tuple = ( last, first, vrf, workspace) 
-    sql_query = "SELECT * FROM IPAM WHERE first <= (inet %s) AND last >= (inet %s) AND vrf = %s AND workspace = %s"
+    sql_query = "SELECT * FROM networks WHERE first <= (inet %s) AND last >= (inet %s) AND vrf = %s AND workspace = %s"
     try: 
        cur = conn.cursor() 
        cur.execute(sql_query, data_tuple)
@@ -314,11 +318,11 @@ def get_overlaps(network , vrf, workspace):
     return (1, cleaned_overlapping)   
 
 # TRANSACTION SAFE
-def delete(network, vrf, workspace):
+def delete_net(network, vrf, workspace):
    first = str(network.network_address)
    last  = str(network.broadcast_address)
    data_tuple = (first, last, vrf, workspace)
-   sql_query = "DELETE FROM IPAM WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace=%s;"
+   sql_query = "DELETE FROM networks WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace=%s;"
    try:
       cur = conn.cursor()
       cur.execute(sql_query, data_tuple)
@@ -335,7 +339,7 @@ def edit_network(network, oldvrf, newvrf, comment, current_status, workspace):
    first = str(network.network_address)
    last  = str(network.broadcast_address)
    data_tuple = (newvrf, comment, current_status, first, last, oldvrf, workspace)
-   sql_query = "UPDATE IPAM SET vrf = %s, comment = %s, current_status=%s WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace = %s;"
+   sql_query = "UPDATE networks SET vrf = %s, comment = %s, current_status=%s WHERE first = (inet %s) AND last = (inet %s) AND vrf = %s AND workspace = %s;"
    try:
       cur = conn.cursor()
       cur.execute( sql_query, data_tuple)
@@ -376,4 +380,93 @@ def authorized( username, workspace):
    if result: 
       return True 
    else:
-      return False 
+      return False
+
+
+
+########################################################################################
+# Host functions
+########################################################################################
+def add_host(host):
+   try:
+      ip = ipaddress.ip_address( host.ip )
+   except Exception as e:
+      return  {"error" : "unable to process ip address, address is incorrect , " + str(e) }     
+   #Make sure there is a network that is available or in-use before adding
+   if ip.version == 4:
+      mask = "32"
+   else:
+      mask = "128"
+   net_enclosing = ipaddress.ip_network(str(ip) + "/" + mask )
+   a = get_overlaps( net_enclosing, host.vrf, host.workspace) 
+   if a[0] == 0:
+      return {"error" : "unable to get overlaps for this host , " + str(a[1]) }  
+   overlap_status = a[1][0]["current_status"] # we know there is only one overlap on /32 or /128 so we can check item 0 on the returned list. The list is given in pos 1 of the return tuple
+   overlap_first  = str(ipaddress.ip_network(a[1][0]["ipnet"]).network_address)
+
+   if( overlap_status != 'available' and overlap_status != 'used'):
+      return  {"error" : "Cannot add IP. The network requested " + str(net_enclosing) + " is not in status available or used" }   
+   data_tuple_b = (host.ip, overlap_first, host.vrf, host.workspace, host.hostname, host.comment )
+   sql_statement_b = "INSERT INTO hosts (ip, first, vrf, workspace, hostname, comment) VALUES (%s,%s,%s,%s,%s,%s );"
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement_b, data_tuple_b)
+   except Exception as e:
+      conn.rollback()
+      cur.close() 
+      return {"error" : "unable to connect to database to add network , " +str(e) }
+   conn.commit()
+   cur.close() 
+   return host.dict() 
+
+def get_host(host):
+   try:
+      host_validated = str(ipaddress.ip_address( host.ip ))
+   except Exception as e:
+      return  {"error" : "unable to process address, address is incorrect , " + str(e) }   
+   data_tuple = (host_validated, host.vrf, host.workspace)
+   sql_statement = "SELECT * FROM hosts WHERE ip = (inet %s) AND vrf = %s AND workspace = %s;"
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_statement, data_tuple)
+      hostdata = cur.fetchone()
+   except Exception as e:
+      cur.close() 
+      return {"error" : "unable to connect to database to get host details, " + str(e) } 
+   if hostdata is None:
+      cur.close() 
+      return {"error" : "no such address, " + str(host.ip) } 
+   cur.close()  
+   return { "ip" : hostdata[0], "first" : hostdata[1], "vrf" : hostdata[2].strip(), "workspace" : hostdata[3].strip(), "hostname" : hostdata[4].strip(), "comment" : hostdata[5].strip() }
+
+
+   # TRANSACTION SAFE
+
+def delete_host(host):
+   data_tuple = (host.ip, host.vrf, host.workspace)
+   sql_query = "DELETE FROM hosts WHERE ip = (inet %s) AND vrf = %s AND workspace=%s;"
+   try:
+      cur = conn.cursor()
+      cur.execute(sql_query, data_tuple)
+      conn.commit()
+   except Exception as e:
+      cur.close()
+      return (0, "Unable to delete from database, " + str(e))
+   cur.close() 
+   return(1,"")
+
+def edit_host(hostIn):
+   # fixme, if none is given as comment or vrf it shouldn't overwrite with none
+   data_tuple = (hostIn.newvrf, hostIn.hostname, hostIn.comment, hostIn.ip, hostIn.vrf, hostIn.workspace)
+   sql_query = "UPDATE hosts SET vrf = %s, hostname = %s, comment=%s WHERE ip = (inet %s) AND vrf = %s AND workspace = %s;"
+   try:
+      cur = conn.cursor()
+      cur.execute( sql_query, data_tuple)
+      conn.commit()
+   except Exception as e:
+      cur.close() 
+      return (0, "Unable to edit host ," + str(e))
+   cur.close() 
+   if cur.rowcount == 0:
+      return (0, "Unable to edit, host not found")
+   return (1,"")

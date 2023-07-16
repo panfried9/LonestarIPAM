@@ -77,14 +77,14 @@ if r.status_code == 200:
    sys.exit()
 
 # delete user from workspace, negative test workspace doesn't exists 
-json = { "workspace" : "e" }
+json = { "workspacename" : "e" }
 r = requests.delete( baseurl + "/usersworkspaces/", json=json, auth=HTTPBasicAuth('tuffin','blank123' ))
 if r.status_code == 200:
    print("manage to delete user from nonexisting workspace ", json, r.status_code, r.content)
    sys.exit()
 
 # delete user from workspace
-json = { "workspace" : "eken_AB" }  
+json = { "workspacename" : "eken_AB" }  
 r = requests.delete( baseurl + "/usersworkspaces/", json=json, auth=HTTPBasicAuth('tuffin','blank123' ))
 if r.status_code != 200:
    print("fail to delete user from workspace", json, r.status_code, r.content)
