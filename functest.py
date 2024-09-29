@@ -17,7 +17,7 @@ json2 = { "username" : "tuffinuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
 
 r = requests.post( baseurl + "/users", json = json, auth=auth )
 if r.status_code != 200 :
-   print("fail add user ", r.content, json)
+   print("fail add user -->", r.content, json)
    sys.exit()
  
 r = requests.post( baseurl + "/users", json = json2, auth=auth )
@@ -29,7 +29,7 @@ if r.status_code == 200 :
 json = { "workspacename" : "eken_AB" }
 r = requests.post( baseurl + "/workspaces", json=json, auth=auth) 
 if r.status_code !=200 :
-   print( "Failed to add new workspace ", r.status_code, r.content, json) 
+   print( "Failed to add new workspace A", r.status_code, r.content, json) 
    sys.exit()
 
 # add new user to workspace
@@ -97,12 +97,14 @@ json2 = { "ipnet" : str(ipaddress.ip_network("30.30.30.0/29")) , "vrf": "nmnet",
 json3 = { "ipnet" : str(ipaddress.ip_network("60.50.40.0/24")) , "vrf": "nmnet", "workspace" : "admin", "comment" : "blank" }
 json4 = { "ipnet" : str(ipaddress.ip_network("60.50.41.0/24")) , "vrf": "nmnet", "workspace" : "admin", "comment" : "blank" }
 json5 = { "ipnet" : str(ipaddress.ip_network("70.50.41.0/29")) , "vrf": "nmnet", "workspace" : "admin", "comment" : "blank" }
+json6 = { "ipnet" : str(ipaddress.ip_network("192.168.0.0/24")) , "vrf": "nmnet", "workspace" : "admin", "comment" : "blank" }
 r = requests.post( baseurl + "/networks/", json = json, auth=auth )
 r2= requests.post( baseurl + "/networks/", json = json2, auth=auth )
 r3= requests.post( baseurl + "/networks/", json = json3, auth=auth )
 r4= requests.post( baseurl + "/networks/", json = json4, auth=auth )
 r5= requests.post( baseurl + "/networks/", json = json5, auth=auth )
-if r.status_code != 200 or r2.status_code != 200 or r3.status_code != 200 or r4.status_code != 200 or r5.status_code !=200:
+r6= requests.post( baseurl + "/networks/", json = json6, auth=auth )
+if r.status_code != 200 or r2.status_code != 200 or r3.status_code != 200 or r4.status_code != 200 or r5.status_code !=200 or r6.status_code != 200:
    print("fail to add v4", r.status_code, r.content, json, json2, json3, json4,json5 )   
    sys.exit()
 
@@ -117,9 +119,13 @@ if r.status_code == 200:
 # add a v6 network
 json = { "ipnet" : str(ipaddress.ip_network("2001:db8::/64")) ,  "vrf": "nmnet", "workspace" : "admin", "comment" : "blank" }
 json2 = { "ipnet" : str(ipaddress.ip_network("2001:db9::/64")) , "vrf": "nmnet", "workspace" : "admin", "comment" : "blank" }
+json3 = { "ipnet" : str(ipaddress.ip_network("7777:7777:777A::/48")) , "vrf": "nmnet", "workspace" : "admin", "comment" : "blank" }
+json4 = { "ipnet" : str(ipaddress.ip_network("7777:7777:777B::/48")) , "vrf": "nmnet", "workspace" : "admin", "comment" : "blank" }
 r = requests.post( baseurl + "/networks/", json = json, auth=auth )
-r2 = requests.post( baseurl + "/networks/", json = json2, auth=auth )
-if r.status_code != 200 or r2.status_code != 200:
+r2= requests.post( baseurl + "/networks/", json = json2, auth=auth )
+r3 = requests.post( baseurl + "/networks/", json = json3, auth=auth )
+r4 = requests.post( baseurl + "/networks/", json = json4, auth=auth )
+if r.status_code != 200 or r2.status_code != 200 or r3.status_code != 200 or r4.status_code != 200:
    print("fail add v6",  r, json) 
    sys.exit()
 
@@ -199,8 +205,24 @@ if r.status_code != 200:
 sumnet = jsonstuff.loads(r.content) 
 expected_results = "60.50.40.0/23"   
 if sumnet[0]["ipnet"] != expected_results:
-   print("Unexpected result from summarizing A ", r.content, r.status_code, json) 
+   print("Unexpected result from summarizing v4 ", r.content, r.status_code, json) 
    sys.exit()
+
+
+# summarize v6 network
+json= { "firstnet" : {"ipnet" : "7777:7777:777A::/48", "vrf" : "nmnet", "workspace" : "admin" }, 
+        "secondnet": {"ipnet" : "7777:7777:777B::/48", "vrf" : "nmnet", "workspace" : "admin" }  } 
+r = requests.post( baseurl + "/networks/summarize", json = json, auth=auth )
+if r.status_code != 200:
+   print("error summarizing", r.content, json) 
+   sys.exit()
+sumnet = jsonstuff.loads(r.content) 
+expected_results = "7777:7777:777a::/47"   
+if sumnet[0]["ipnet"] != expected_results:
+   print("Unexpected result from summarizing A ", r.content, r.status_code, json) 
+   print("Expected", expected_results, "got", sumnet[0]["ipnet"])
+   sys.exit()
+
 
 # split v6 network
 # first add a network that we can later split
@@ -257,7 +279,7 @@ params = { 'size' : 20 , 'page' : 1 }
 print("Param test")  
 r = requests.get( baseurl + "/networks/overlaps/admin/nmnet/30.0.0.0/8", params = params, auth=auth)
 if r.status_code !=200:
-  print("failed to find overlaps v4 ",  r)
+  print("failed to find overlaps v4 ",  r.content  )
   sys.exit()
 overlaps = jsonstuff.loads(r.content)["items"]
 #print("OVERLAPS---> ", overlaps) 

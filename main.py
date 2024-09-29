@@ -1,7 +1,8 @@
 from fastapi import Depends, FastAPI, HTTPException, status, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import uvicorn
-import postgresdatabase as database 
+#import postgresdatabase as database 
+import psql_trans as database
 import ipaddress
 from typing import Union, Literal, List
 from typing_extensions import Annotated
@@ -18,7 +19,7 @@ def authenticate(credentials: Annotated[HTTPBasicCredentials, Depends(security)]
          return credentials.username
       else:
         # If the user does not exist or the password is incorrect, return false
-         raise HTTPException(status_code=401, detail="Invalid username or password")
+         raise HTTPException(status_code=401, detail="Invalid username or password"  )
 
 def authorized_for_net(username, net):
     a = database.get_network(net)
@@ -301,7 +302,7 @@ async def exclude_net(net: models.netSplit , username: Annotated[str, Depends(au
 # takes two networks
 # summarizes if possible
 # returns a baseNet that is the summary of the input.
-# FIXME, should use collapse network from ipnetwork module instead
+# FIXME, should use collapse network from ipnetwork module instead *done
 #######################################################################
 @app.post("/networks/summarize", response_model = List[models.netFull] )
 async def summarize_net(firstnet: models.netBase, secondnet: models.netBase, username: Annotated[str, Depends(authenticate)]):
@@ -334,9 +335,11 @@ async def summarize_net(firstnet: models.netBase, secondnet: models.netBase, use
    # if we are here, we know the networks are clean and contingious
    # try to fuse them together
    try:
-      summarized_iterator = ipaddress.summarize_address_range(ipaddress.ip_network(firstnet.ipnet).network_address, ipaddress.ip_network(secondnet.ipnet).broadcast_address)
+      summarized_iterator = ipaddress.collapse_addresses([ipaddress.ip_network(firstnet.ipnet), ipaddress.ip_network(secondnet.ipnet)])
+   #try:
+   #   summarized_iterator = ipaddress.summarize_address_range(ipaddress.ip_network(firstnet.ipnet).network_address, ipaddress.ip_network(secondnet.ipnet).broadcast_address)
    except Exception as e:
-      raise HTTPException( status_code=500, detail="unable to summarize, " + str(e)) 
+      raise HTTPException( status_code=500, detail="unable to summarize weird, " + str(e)) 
    for s in summarized_iterator:
       ss.append( models.netFull(ipnet = str(s), vrf = firstnet.vrf, workspace = firstnet.workspace, comment= firstnet_db["comment"].strip(), current_status = firstnet_db["current_status"] ) )
    c = database.del_then_add_network([firstnet, secondnet], ss)
